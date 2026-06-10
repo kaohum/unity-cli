@@ -1001,17 +1001,17 @@ namespace UnityCliBridge.Core
                         break;
                     // Addressables management commands
                     case "addressables_manage":
-                        var addressablesManageResult = AddressablesHandler.HandleCommand(command.Parameters["action"]?.ToString(), command.Parameters);
+                        var addressablesManageResult = new { success = false, message = "Addressables support has been removed from this Bridge package" };
                         response = Response.SuccessResult(command.Id, addressablesManageResult);
                         break;
                     // Addressables build commands
                     case "addressables_build":
-                        var addressablesBuildResult = AddressablesHandler.HandleCommand(command.Parameters["action"]?.ToString(), command.Parameters);
+                        var addressablesBuildResult = new { success = false, message = "Addressables support has been removed from this Bridge package" };
                         response = Response.SuccessResult(command.Id, addressablesBuildResult);
                         break;
                     // Addressables analyze commands
                     case "addressables_analyze":
-                        var addressablesAnalyzeResult = AddressablesHandler.HandleCommand(command.Parameters["action"]?.ToString(), command.Parameters);
+                        var addressablesAnalyzeResult = new { success = false, message = "Addressables support has been removed from this Bridge package" };
                         response = Response.SuccessResult(command.Id, addressablesAnalyzeResult);
                         break;
                     // Project Settings commands

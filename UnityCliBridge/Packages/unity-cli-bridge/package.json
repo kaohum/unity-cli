@@ -1,7 +1,7 @@
 {
   "name": "com.akiojin.unity-cli-bridge",
   "displayName": "Unity CLI Bridge",
-  "version": "0.11.4",
+  "version": "0.11.3",
   "unity": "6000.0",
   "description": "Unity Editor bridge package for unity-cli automation (screenshots, video capture, scene analysis, input automation).",
   "keywords": [
@@ -20,8 +20,7 @@
   "dependencies": {
     "com.unity.nuget.newtonsoft-json": "3.2.1",
     "com.unity.inputsystem": "1.14.2",
-    "com.unity.recorder": "4.0.0",
-    "com.unity.addressables": "1.22.3"
+    "com.unity.recorder": "4.0.0"
   },
   "repository": {
     "type": "git",
