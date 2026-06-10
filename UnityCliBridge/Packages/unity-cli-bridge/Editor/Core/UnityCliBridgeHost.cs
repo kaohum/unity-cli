@@ -543,7 +543,25 @@ namespace UnityCliBridge.Core
                 }
 
                 string response;
-                
+
+                // Some commands require Play Mode (e.g. FairyGUI input simulation, screenshots)
+                if (!Application.isPlaying && PlayModeCommandPolicy.RequiresPlayMode(command.Type))
+                {
+                    response = Response.ErrorResult(
+                        command.Id,
+                        $"Command '{command.Type}' requires Play Mode. Enter play mode first (e.g. play_game).",
+                        "NOT_IN_PLAY_MODE",
+                        new { commandType = command.Type, isPlaying = false }
+                    );
+                    response = PrepareCommandResponseForStats(response, out _);
+                    var sendStopwatch = Stopwatch.StartNew();
+                    await TrySendFramedMessage(responseStream, response, CancellationToken.None);
+                    sendStopwatch.Stop();
+                    BridgeCommandStats.RecordStageDuration("response_send_ms", sendStopwatch.Elapsed.TotalMilliseconds);
+                    statsScope.Complete(false, Encoding.UTF8.GetByteCount(response));
+                    return;
+                }
+
                 // During Play Mode, restrict heavy commands per policy to keep the bridge responsive
                 if (Application.isPlaying && !PlayModeCommandPolicy.IsAllowed(command.Type))
                 {
@@ -1053,6 +1071,57 @@ namespace UnityCliBridge.Core
                             response = Response.SuccessResult(command.Id, BridgeCommandStats.CaptureSnapshot());
                             break;
                         }
+                    // FairyGUI commands (SLG project)
+                    case "fairygui_tap":
+                        var fairyguiTapResult = FairyGUIInputBridge.Tap(command.Parameters);
+                        response = Response.SuccessResult(command.Id, fairyguiTapResult);
+                        break;
+                    case "fairygui_click_by_text":
+                        var fairyguiClickResult = FairyGUIInputBridge.ClickByText(command.Parameters);
+                        response = Response.SuccessResult(command.Id, fairyguiClickResult);
+                        break;
+                    case "fairygui_list_buttons":
+                        var fairyguiListResult = FairyGUIInputBridge.ListButtons(command.Parameters);
+                        response = Response.SuccessResult(command.Id, fairyguiListResult);
+                        break;
+                    // SLG project: query build/worker state (requires PlayMode)
+                    case "query_build_state":
+                        {
+                            var queryResult = InvokeExternalHandler(
+                                "Game.Editor.MCPTools.QueryBuildStateTool, Game.MCPTools.Editor",
+                                "HandleCommand",
+                                command.Parameters);
+                            if (queryResult != null)
+                            {
+                                response = Response.SuccessResult(command.Id, queryResult);
+                            }
+                            else
+                            {
+                                response = Response.ErrorResult(command.Id,
+                                    "QueryBuildStateTool not available (assembly not loaded)",
+                                    "HANDLER_NOT_FOUND", null);
+                            }
+                            break;
+                        }
+                    case "query_build_detail":
+                        {
+                            var queryResult = InvokeExternalHandler(
+                                "Game.Editor.MCPTools.QueryBuildDetailTool, Game.MCPTools.Editor",
+                                "HandleCommand",
+                                command.Parameters);
+
+                            if (queryResult == null)
+                            {
+                                response = Response.ErrorResult(command.Id,
+                                    "query_build_detail returned null",
+                                    "HANDLER_NOT_FOUND", null);
+                            }
+                            else
+                            {
+                                response = Response.SuccessResult(command.Id, queryResult);
+                            }
+                            break;
+                        }
                     default:
                         // Use new format with error details
                         response = Response.ErrorResult(
@@ -1292,6 +1361,30 @@ namespace UnityCliBridge.Core
                 }
 
                 return dropped;
+            }
+        }
+
+        /// <summary>
+        /// Invokes a static handler method in an external assembly via reflection.
+        /// Used for project-specific commands that live outside the bridge assembly.
+        /// Returns the raw result object, or null if the type/method is not found.
+        /// </summary>
+        private static object InvokeExternalHandler(string typeAssembly, string methodName, JObject parameters)
+        {
+            try
+            {
+                var handlerType = System.Type.GetType(typeAssembly);
+                if (handlerType == null) return null;
+
+                var method = handlerType.GetMethod(methodName,
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                if (method == null) return null;
+
+                return method.Invoke(null, new object[] { parameters });
+            }
+            catch (Exception ex)
+            {
+                return new { success = false, error = $"External handler error: {ex.InnerException?.Message ?? ex.Message}" };
             }
         }
 

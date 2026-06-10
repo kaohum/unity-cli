@@ -38,12 +38,18 @@ namespace UnityCliBridge.Settings
             }
 
             EditorGUILayout.LabelField("TCP Listener", EditorStyles.boldLabel);
-            
+
             EditorGUILayout.PropertyField(_serializedSettings.FindProperty("unityHost"), new GUIContent("Host"));
             EditorGUILayout.LabelField("", "CLI env: UNITY_CLI_HOST", EditorStyles.miniLabel);
-            
-            EditorGUILayout.PropertyField(_serializedSettings.FindProperty("port"), new GUIContent("Port"));
-            EditorGUILayout.LabelField("", "CLI env: UNITY_CLI_PORT", EditorStyles.miniLabel);
+
+            var settings = (UnityCliBridgeProjectSettings)_serializedSettings.targetObject;
+            var autoPort = settings.ResolvedPort;
+            EditorGUILayout.LabelField("Port (auto)", autoPort.ToString());
+            EditorGUILayout.HelpBox(
+                $"Port is auto-calculated from project path (ASCII sum % 100 + 6400).\n" +
+                $"Current path: {Application.dataPath.Substring(0, Application.dataPath.Length - "/Assets".Length)}\n" +
+                $"Calculated port: {autoPort}",
+                MessageType.None);
 
             EditorGUILayout.Space();
 
@@ -63,7 +69,6 @@ namespace UnityCliBridge.Settings
                 {
                     _serializedSettings.ApplyModifiedProperties();
 
-                    var settings = (UnityCliBridgeProjectSettings)_serializedSettings.targetObject;
                     settings.SaveProjectSettings(true);
 
                     UnityCliBridge.Core.UnityCliBridge.Restart();

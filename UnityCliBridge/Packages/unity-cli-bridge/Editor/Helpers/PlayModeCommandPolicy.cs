@@ -9,6 +9,18 @@ namespace UnityCliBridge.Helpers
     /// </summary>
     public static class PlayModeCommandPolicy
     {
+        /// <summary>
+        /// Commands that require Play Mode to function (e.g. FairyGUI input simulation, screenshots).
+        /// Calling these while NOT in Play Mode will return an error.
+        /// </summary>
+        private static readonly HashSet<string> RequirePlayMode = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "fairygui_tap", "fairygui_click_by_text", "fairygui_list_buttons",
+            "capture_screenshot",
+            // SLG build state query
+            "query_build_state", "query_build_detail",
+        };
+
         private static readonly HashSet<string> AllowedInPlay = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             // Status/Info
@@ -17,6 +29,10 @@ namespace UnityCliBridge.Helpers
             "input_mouse", "input_keyboard", "input_touch", "input_gamepad",
             // UI simple interactions
             "click_ui_element", "set_ui_element_value", "simulate_ui_input",
+            // FairyGUI (SLG project)
+            "fairygui_tap", "fairygui_click_by_text", "fairygui_list_buttons",
+            // SLG build/worker state query
+            "query_build_state", "query_build_detail",
             // Animator queries
             "get_animator_state", "get_animator_runtime_info",
             // Screenshot / Video (game/scene)
@@ -62,6 +78,14 @@ namespace UnityCliBridge.Helpers
 
             // Default allow for other read-only queries
             return true;
+        }
+
+        /// <summary>
+        /// Returns true if the command type requires Play Mode to function.
+        /// </summary>
+        public static bool RequiresPlayMode(string commandType)
+        {
+            return !string.IsNullOrEmpty(commandType) && RequirePlayMode.Contains(commandType);
         }
     }
 }
