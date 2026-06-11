@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
@@ -13,50 +14,63 @@ namespace UnityCliBridge.Handlers
 {
     /// <summary>
     /// Compiles and executes C# code dynamically using Roslyn.
-    /// All loaded assemblies (Unity API + project code) are available as references.
-    /// Blocked during Play Mode by PlayModeCommandPolicy.
+    /// Features: auto-inject common usings, auto-detect class/method, helpful error messages.
     /// </summary>
     public static class ScriptExecutionHandler
     {
-        /// <summary>
-        /// Cache resolved MetadataReferences across calls (Unity assemblies don't change at runtime).
-        /// </summary>
         private static List<MetadataReference> mCachedReferences;
         private static readonly object mLock = new object();
+
+        /// <summary>
+        /// Usings auto-injected before user code. Already-present usings in user code are skipped.
+        /// </summary>
+        private static readonly string[] AutoUsings = new string[]
+        {
+            "using System;",
+            "using System.Text;",
+            "using System.Collections.Generic;",
+            "using UnityEngine;",
+            "using Game.Runtime;",
+            "using Framework.Runtime;",
+            "using Table;",
+        };
 
         /// <summary>
         /// Compile and execute C# code provided by the caller.
         /// </summary>
         /// <param name="parameters">
         ///   code        - (required) C# source code. Must define a class with a static method.
-        ///   class_name  - (optional) Name of the class to instantiate/find. Default "Script".
-        ///   method_name - (optional) Name of the static method to invoke. Default "Main".
+        ///   class_name  - (optional) Auto-detected from code if omitted.
+        ///   method_name - (optional) Auto-detected from code if omitted.
         /// </param>
-        /// <returns>Anonymous object with success/result or error/compilationErrors.</returns>
         public static object Execute(JObject parameters)
         {
             try
             {
-                // 1. Extract parameters
                 string code = parameters["code"]?.ToObject<string>();
-                string className = parameters["class_name"]?.ToObject<string>() ?? "Script";
-                string methodName = parameters["method_name"]?.ToObject<string>() ?? "Main";
-
                 if (string.IsNullOrWhiteSpace(code))
                     return new { success = false, error = "Parameter 'code' is required" };
 
-                // 2. Get assembly references (cached after first call)
-                var references = GetReferences();
+                // 1. Auto-inject usings
+                code = InjectUsings(code);
 
-                // 3. Parse and compile
+                // 2. Parse syntax tree
                 var syntaxTree = CSharpSyntaxTree.ParseText(code);
+                var root = syntaxTree.GetRoot();
+
+                // 3. Auto-detect class and method if not specified
+                var autoDetected = AutoDetectClassAndMethod(root);
+                string className = parameters["class_name"]?.ToObject<string>() ?? autoDetected.className ?? "Script";
+                string methodName = parameters["method_name"]?.ToObject<string>() ?? autoDetected.methodName ?? "Main";
+
+                // 4. Compile
+                var references = GetReferences();
                 var compilation = CSharpCompilation.Create(
                     "ScriptExecution_" + Guid.NewGuid().ToString("N"),
                     new[] { syntaxTree },
                     references,
                     new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
 
-                // 4. Emit to memory
                 using var ms = new MemoryStream();
                 var emitResult = compilation.Emit(ms);
                 if (!emitResult.Success)
@@ -68,20 +82,28 @@ namespace UnityCliBridge.Handlers
                     return new { success = false, error = "Compilation failed", compilationErrors = errors };
                 }
 
-                // 5. Load compiled assembly and invoke method
+                // 5. Load and invoke
                 ms.Seek(0, SeekOrigin.Begin);
                 var assembly = Assembly.Load(ms.ToArray());
 
                 var type = assembly.GetType(className);
                 if (type == null)
-                    return new { success = false, error = $"Type '{className}' not found in compiled assembly" };
+                {
+                    var available = assembly.GetTypes()
+                        .Where(t => t.IsClass && t.IsPublic)
+                        .Select(t => t.Name).ToArray();
+                    return new { success = false, error = $"Type '{className}' not found. Available classes: [{string.Join(", ", available)}]" };
+                }
 
                 var method = type.GetMethod(methodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
                 if (method == null)
-                    return new { success = false, error = $"Method '{methodName}' not found on type '{className}'" };
+                {
+                    var available = type.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                        .Select(m => m.Name).ToArray();
+                    return new { success = false, error = $"Method '{methodName}' not found on '{className}'. Available methods: [{string.Join(", ", available)}]" };
+                }
 
                 var result = method.Invoke(null, null);
-
                 return new { success = true, result = SerializeResult(result) };
             }
             catch (TargetInvocationException tie)
@@ -96,9 +118,53 @@ namespace UnityCliBridge.Handlers
         }
 
         /// <summary>
-        /// Collect MetadataReferences from all loaded assemblies plus Unity's core directories.
-        /// Result is cached after the first successful collection.
+        /// Prepend auto-usings that are not already present in user code.
         /// </summary>
+        private static string InjectUsings(string code)
+        {
+            var existing = new HashSet<string>();
+            foreach (var line in code.Split('\n'))
+            {
+                var trimmed = line.Trim();
+                if (trimmed.StartsWith("using ") && trimmed.EndsWith(";"))
+                    existing.Add(trimmed);
+                else if (!string.IsNullOrWhiteSpace(trimmed) && !trimmed.StartsWith("//"))
+                    break; // stop at first non-using, non-comment line
+            }
+
+            var injected = new List<string>();
+            foreach (var usng in AutoUsings)
+            {
+                if (!existing.Contains(usng))
+                    injected.Add(usng);
+            }
+
+            if (injected.Count == 0) return code;
+            return string.Join("\n", injected) + "\n" + code;
+        }
+
+        /// <summary>
+        /// Extract the first public class name and its first public static method name from syntax tree.
+        /// </summary>
+        private static (string className, string methodName) AutoDetectClassAndMethod(SyntaxNode root)
+        {
+            string className = null;
+            string methodName = null;
+
+            var classDecl = root.DescendantNodes().OfType<ClassDeclarationSyntax>().FirstOrDefault();
+            if (classDecl == null) return (null, null);
+
+            className = classDecl.Identifier.Text;
+
+            var methodDecl = classDecl.Members.OfType<MethodDeclarationSyntax>()
+                .FirstOrDefault(m => m.Modifiers.Any(k => k.IsKind(SyntaxKind.PublicKeyword))
+                                  && m.Modifiers.Any(k => k.IsKind(SyntaxKind.StaticKeyword)));
+            if (methodDecl != null)
+                methodName = methodDecl.Identifier.Text;
+
+            return (className, methodName);
+        }
+
         private static List<MetadataReference> GetReferences()
         {
             lock (mLock)
@@ -109,17 +175,11 @@ namespace UnityCliBridge.Handlers
                 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var refs = new List<MetadataReference>();
 
-                // Source 1: Unity Editor Managed directory (mscorlib, System, etc.)
-                var dataPath = Application.dataPath; // <UnityInstall>/Editor/Data
+                var dataPath = Application.dataPath;
                 AddDllsFromDirectory(refs, seen, Path.Combine(dataPath, "Managed"));
-
-                // Source 2: .NET Standard reference assemblies
                 AddDllsFromDirectory(refs, seen, Path.Combine(dataPath, "NetStandard", "ref", "2.1.0"));
-
-                // Source 3: Unity Managed/UnityEngine sub-directory
                 AddDllsFromDirectory(refs, seen, Path.Combine(dataPath, "Managed", "UnityEngine"));
 
-                // Source 4: All currently loaded assemblies (project code, packages, etc.)
                 foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
                 {
                     if (assembly.IsDynamic) continue;
@@ -134,9 +194,6 @@ namespace UnityCliBridge.Handlers
             }
         }
 
-        /// <summary>
-        /// Add all DLL files from a directory as MetadataReferences, skipping duplicates.
-        /// </summary>
         private static void AddDllsFromDirectory(List<MetadataReference> refs, HashSet<string> seen, string directory)
         {
             if (!Directory.Exists(directory)) return;
@@ -152,10 +209,6 @@ namespace UnityCliBridge.Handlers
             }
         }
 
-        /// <summary>
-        /// Serialize the return value to a JSON-safe representation.
-        /// Primitives and strings pass through; complex objects are JSON-serialized.
-        /// </summary>
         private static object SerializeResult(object result)
         {
             if (result == null) return null;
