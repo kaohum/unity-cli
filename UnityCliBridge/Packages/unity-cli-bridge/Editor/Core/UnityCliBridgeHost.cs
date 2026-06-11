@@ -1122,6 +1122,11 @@ namespace UnityCliBridge.Core
                             }
                             break;
                         }
+                    // Dynamic script execution (Roslyn-based)
+                    case "script_execute":
+                        var scriptExecuteResult = ScriptExecutionHandler.Execute(command.Parameters);
+                        response = Response.SuccessResult(command.Id, scriptExecuteResult);
+                        break;
                     default:
                         // Use new format with error details
                         response = Response.ErrorResult(
