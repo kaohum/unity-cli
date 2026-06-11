@@ -31,11 +31,49 @@ namespace UnityCliBridge.Handlers
             "using System;",
             "using System.Text;",
             "using System.Collections.Generic;",
+            "using System.Linq;",
+            "using System.Reflection;",
+            "using static ScriptHelper;",
             "using UnityEngine;",
             "using Game.Runtime;",
             "using Framework.Runtime;",
             "using Table;",
         };
+
+        /// <summary>
+        /// Helper class appended to user code, providing Inspect() for runtime member discovery.
+        /// </summary>
+        private static readonly string HelperCode = @"
+public static class ScriptHelper
+{
+    public static string Inspect(object obj)
+    {
+        if (obj == null) return ""null"";
+        var t = obj.GetType();
+        var lines = new List<string>();
+        lines.Add(t.Name + "" ("" + t.FullName + "")"");
+        lines.Add(""Properties:"");
+        foreach (var p in t.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
+        {
+            try
+            {
+                object val = p.GetIndexParameters().Length > 0 ? null : p.GetValue(obj);
+                var vs = val == null ? ""null"" : val.ToString();
+                lines.Add(""  "" + p.Name + "" ["" + p.PropertyType.Name + ""] = "" + vs);
+            }
+            catch { lines.Add(""  "" + p.Name + "" ["" + p.PropertyType.Name + ""] = <error>""); }
+        }
+        lines.Add(""Methods:"");
+        foreach (var m in t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
+        {
+            if (m.DeclaringType == typeof(object) || m.IsSpecialName) continue;
+            var parms = string.Join("", "", m.GetParameters().Select(p => p.ParameterType.Name));
+            lines.Add(""  "" + m.ReturnType.Name + "" "" + m.Name + ""("" + parms + "")"");
+        }
+        return string.Join(""\n"", lines);
+    }
+}
+";
 
         /// <summary>
         /// Compile and execute C# code provided by the caller.
@@ -55,6 +93,9 @@ namespace UnityCliBridge.Handlers
 
                 // 1. Auto-inject usings
                 code = InjectUsings(code);
+
+                // 1.5. Inject helper methods (ScriptHelper.Inspect)
+                code = code + "\n" + HelperCode + "\n";
 
                 // 2. Parse syntax tree
                 var syntaxTree = CSharpSyntaxTree.ParseText(code);
