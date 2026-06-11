@@ -42,6 +42,8 @@ namespace UnityCliBridge.Helpers
             "get_hierarchy", "get_scene_info", "get_gameobject_details", "find_gameobject", "find_by_component",
             // PlayMode controls
             "play_game", "pause_game", "stop_game",
+            // Dynamic script execution (Roslyn-based, cached references)
+            "script_execute",
         };
 
         /// <summary>

@@ -2,7 +2,7 @@
 
 ### 🚀 Features
 
-- *(bridge)* **`script_execute` — Roslyn 动态编译执行 C# 代码**：AI Agent 可通过 `unity-cli raw script_execute` 在 Unity Editor 中编译并执行任意 C# 代码，所有 Unity API 和项目程序集均可访问。支持编译错误诊断、运行时异常捕获、复杂返回值自动 JSON 序列化。Play Mode 下自动拦截（PlayModeCommandPolicy `script_` 前缀启发式）
+- *(bridge)* **`script_execute` — Roslyn 动态编译执行 C# 代码**：AI Agent 可通过 `unity-cli raw script_execute` 在 Unity Editor 中编译并执行任意 C# 代码，所有 Unity API 和项目程序集均可访问。支持编译错误诊断、运行时异常捕获、复杂返回值自动 JSON 序列化。Editor 和 Play Mode 均可使用（PlayMode 白名单放行，支持运行时动态调试）
 - *(bridge)* SLG 项目定制扩展：FairyGUI 输入桥接（`fairygui_tap`/`fairygui_click_by_text`/`fairygui_list_buttons`）、PlayMode 命令策略（白名单+黑名单+启发式拦截）、端口根据项目路径自动计算、`InvokeExternalHandler` 反射调用外部 Handler
 
 ### 🔄 Refactor
