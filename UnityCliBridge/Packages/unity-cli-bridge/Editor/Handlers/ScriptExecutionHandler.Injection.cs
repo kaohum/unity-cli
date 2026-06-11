@@ -30,7 +30,8 @@ namespace UnityCliBridge.Handlers
 
         /// <summary>
         /// Helper class appended to user code. Provides Inspect/InspectType for runtime member discovery.
-        /// Features: basic-type short-circuit, full generic names, output truncation (4KB limit).
+        /// Features: basic-type short-circuit, full generic names, ByRef unwrap, clean full name,
+        /// static-class tag, exception type in errors, line-boundary truncation (4KB limit).
         /// </summary>
         private static readonly string HelperCode = @"
 public static class ScriptHelper
@@ -42,7 +43,7 @@ public static class ScriptHelper
         if (t.IsPrimitive || t.IsEnum || obj is string || obj is decimal)
             return obj.ToString() + "" ["" + TypeName(t) + ""]"";
         var lines = new List<string>();
-        lines.Add(TypeName(t) + "" ("" + t.FullName + "")"");
+        lines.Add(TypeName(t) + "" ("" + FullTypeName(t) + "")"");
         lines.Add(""Properties:"");
         foreach (var p in t.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
         {
@@ -51,7 +52,7 @@ public static class ScriptHelper
                 object val = p.GetIndexParameters().Length > 0 ? null : p.GetValue(obj);
                 lines.Add(""  "" + p.Name + "" ["" + TypeName(p.PropertyType) + ""] = "" + FmtVal(val));
             }
-            catch { lines.Add(""  "" + p.Name + "" ["" + TypeName(p.PropertyType) + ""] = <error>""); }
+            catch (Exception ex) { lines.Add(""  "" + p.Name + "" ["" + TypeName(p.PropertyType) + ""] = <"" + ex.GetType().Name + "">""); }
         }
         lines.Add(""Methods:"");
         foreach (var m in t.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
@@ -65,7 +66,8 @@ public static class ScriptHelper
     public static string InspectType(Type type)
     {
         var lines = new List<string>();
-        lines.Add(TypeName(type) + "" ("" + type.FullName + "") [static]"");
+        var tag = (type.IsAbstract && type.IsSealed) ? ""[static class]"" : ""[static members only]"";
+        lines.Add(TypeName(type) + "" ("" + FullTypeName(type) + "") "" + tag);
         lines.Add(""Properties:"");
         foreach (var p in type.GetProperties(BindingFlags.Public | BindingFlags.Static))
         {
@@ -74,7 +76,7 @@ public static class ScriptHelper
                 var val = p.GetValue(null);
                 lines.Add(""  "" + p.Name + "" ["" + TypeName(p.PropertyType) + ""] = "" + FmtVal(val));
             }
-            catch { lines.Add(""  "" + p.Name + "" ["" + TypeName(p.PropertyType) + ""] = <error>""); }
+            catch (Exception ex) { lines.Add(""  "" + p.Name + "" ["" + TypeName(p.PropertyType) + ""] = <"" + ex.GetType().Name + "">""); }
         }
         lines.Add(""Methods:"");
         foreach (var m in type.GetMethods(BindingFlags.Public | BindingFlags.Static))
@@ -95,6 +97,7 @@ public static class ScriptHelper
     }
     static string TypeName(Type t)
     {
+        if (t.IsByRef) t = t.GetElementType();
         if (!t.IsGenericType) return t.Name;
         var name = t.Name;
         var idx = name.IndexOf('`');
@@ -102,10 +105,19 @@ public static class ScriptHelper
         var args = string.Join("", "", t.GetGenericArguments().Select(TypeName));
         return name + ""<"" + args + "">"";
     }
+    static string FullTypeName(Type t)
+    {
+        if (t.IsByRef) t = t.GetElementType();
+        var ns = t.Namespace;
+        if (string.IsNullOrEmpty(ns)) return TypeName(t);
+        return ns + ""."" + TypeName(t);
+    }
     static string Truncate(string s)
     {
         if (s.Length <= 4096) return s;
-        return s.Substring(0, 4096) + ""\n... (truncated, "" + s.Length + "" chars total)"";
+        var cut = s.LastIndexOf('\n', 4096);
+        if (cut < 0) cut = 4096;
+        return s.Substring(0, cut) + ""\n... (truncated, "" + s.Length + "" chars total)"";
     }
 }
 ";
