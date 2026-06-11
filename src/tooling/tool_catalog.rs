@@ -112,7 +112,6 @@ pub const TOOL_NAMES: &[&str] = &[
     "refresh_assets",
     "get_test_status",
     "run_tests",
-    "script_execute",
     "click_ui_element",
     "find_ui_elements",
     "get_ui_element_state",
@@ -205,7 +204,6 @@ fn tool_description(name: &str) -> &'static str {
         "find_symbol" => "Find symbol definitions",
         "find_refs" => "Find symbol references",
         "run_tests" => "Run EditMode/PlayMode tests",
-        "script_execute" => "Compile and execute C# code dynamically in Unity Editor using Roslyn. The code must define a class with a static method. All Unity APIs and project assemblies are available. Blocked during Play Mode.",
         _ => "Unity CLI tool operation",
     }
 }
@@ -2244,15 +2242,6 @@ fn tool_params_schema(name: &str) -> Value {
             &[],
             false,
         ),
-        "script_execute" => object_schema(
-            &[
-                ("code", string_schema()),
-                ("class_name", string_schema()),
-                ("method_name", string_schema()),
-            ],
-            &["code"],
-            false,
-        ),
         "get_test_status" => object_schema(
             &[
                 ("includeTestResults", boolean_schema()),
@@ -2482,7 +2471,7 @@ mod tests {
 
     #[test]
     fn tool_catalog_keeps_manifest_parity_count() {
-        assert_eq!(TOOL_NAMES.len(), 130);
+        assert_eq!(TOOL_NAMES.len(), 129);
     }
 
     #[test]
