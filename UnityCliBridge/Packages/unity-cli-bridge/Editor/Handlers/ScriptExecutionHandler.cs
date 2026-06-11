@@ -7,6 +7,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
+using UnityEngine;
 
 namespace UnityCliBridge.Handlers
 {
@@ -17,6 +18,12 @@ namespace UnityCliBridge.Handlers
     /// </summary>
     public static class ScriptExecutionHandler
     {
+        /// <summary>
+        /// Cache resolved MetadataReferences across calls (Unity assemblies don't change at runtime).
+        /// </summary>
+        private static List<MetadataReference> mCachedReferences;
+        private static readonly object mLock = new object();
+
         /// <summary>
         /// Compile and execute C# code provided by the caller.
         /// </summary>
@@ -38,17 +45,8 @@ namespace UnityCliBridge.Handlers
                 if (string.IsNullOrWhiteSpace(code))
                     return new { success = false, error = "Parameter 'code' is required" };
 
-                // 2. Collect assembly references from all loaded assemblies
-                var references = AppDomain.CurrentDomain.GetAssemblies()
-                    .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
-                    .Select(a =>
-                    {
-                        try { return MetadataReference.CreateFromFile(a.Location); }
-                        catch { return null; }
-                    })
-                    .Where(r => r != null)
-                    .Cast<MetadataReference>()
-                    .ToList();
+                // 2. Get assembly references (cached after first call)
+                var references = GetReferences();
 
                 // 3. Parse and compile
                 var syntaxTree = CSharpSyntaxTree.ParseText(code);
@@ -94,6 +92,63 @@ namespace UnityCliBridge.Handlers
             catch (Exception ex)
             {
                 return new { success = false, error = ex.Message, stackTrace = ex.StackTrace };
+            }
+        }
+
+        /// <summary>
+        /// Collect MetadataReferences from all loaded assemblies plus Unity's core directories.
+        /// Result is cached after the first successful collection.
+        /// </summary>
+        private static List<MetadataReference> GetReferences()
+        {
+            lock (mLock)
+            {
+                if (mCachedReferences != null)
+                    return mCachedReferences;
+
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var refs = new List<MetadataReference>();
+
+                // Source 1: Unity Editor Managed directory (mscorlib, System, etc.)
+                var dataPath = Application.dataPath; // <UnityInstall>/Editor/Data
+                AddDllsFromDirectory(refs, seen, Path.Combine(dataPath, "Managed"));
+
+                // Source 2: .NET Standard reference assemblies
+                AddDllsFromDirectory(refs, seen, Path.Combine(dataPath, "NetStandard", "ref", "2.1.0"));
+
+                // Source 3: Unity Managed/UnityEngine sub-directory
+                AddDllsFromDirectory(refs, seen, Path.Combine(dataPath, "Managed", "UnityEngine"));
+
+                // Source 4: All currently loaded assemblies (project code, packages, etc.)
+                foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    if (assembly.IsDynamic) continue;
+                    var location = assembly.Location;
+                    if (string.IsNullOrEmpty(location)) continue;
+                    if (!seen.Add(Path.GetFullPath(location))) continue;
+                    try { refs.Add(MetadataReference.CreateFromFile(location)); } catch { }
+                }
+
+                mCachedReferences = refs;
+                return mCachedReferences;
+            }
+        }
+
+        /// <summary>
+        /// Add all DLL files from a directory as MetadataReferences, skipping duplicates.
+        /// </summary>
+        private static void AddDllsFromDirectory(List<MetadataReference> refs, HashSet<string> seen, string directory)
+        {
+            if (!Directory.Exists(directory)) return;
+            foreach (var dll in Directory.GetFiles(directory, "*.dll"))
+            {
+                try
+                {
+                    var fullPath = Path.GetFullPath(dll);
+                    if (!seen.Add(fullPath)) continue;
+                    refs.Add(MetadataReference.CreateFromFile(fullPath));
+                }
+                catch { }
             }
         }
 
