@@ -1,3 +1,37 @@
+## [Unreleased]
+
+### 🚀 Features
+
+- *(bridge)* **`script_execute` — Roslyn 动态编译执行 C# 代码**：AI Agent 可通过 `unity-cli raw script_execute` 在 Unity Editor 中编译并执行任意 C# 代码，所有 Unity API 和项目程序集均可访问。支持编译错误诊断、运行时异常捕获、复杂返回值自动 JSON 序列化。Play Mode 下自动拦截（PlayModeCommandPolicy `script_` 前缀启发式）
+- *(bridge)* SLG 项目定制扩展：FairyGUI 输入桥接（`fairygui_tap`/`fairygui_click_by_text`/`fairygui_list_buttons`）、PlayMode 命令策略（白名单+黑名单+启发式拦截）、端口根据项目路径自动计算、`InvokeExternalHandler` 反射调用外部 Handler
+
+### 🔄 Refactor
+
+- *(bridge)* 本地 SLG 版本覆盖上游，移除 Addressables 依赖（AddressablesHandler 及相关引用全部删除）
+- *(bridge)* Bridge 包自包含 Roslyn 运行时（5 个 DLL 打包至 `Editor/Dlls/`），无需外部 NuGet 或项目路径依赖
+
+### 📚 Technical Details — `script_execute`
+
+**新增文件：**
+- `Editor/Handlers/ScriptExecutionHandler.cs` — Roslyn 动态编译器，收集 Unity 核心程序集 + 项目程序集作为编译引用，支持 `code`/`class_name`/`method_name` 参数
+- `Editor/Dlls/Microsoft.CodeAnalysis.CSharp.dll` (5.89 MB) — Roslyn C# 编译器
+- `Editor/Dlls/Microsoft.CodeAnalysis.dll` (2.74 MB) — Roslyn 编译器核心
+- `Editor/Dlls/System.Collections.Immutable.dll` (302 KB) — Roslyn 依赖
+- `Editor/Dlls/System.Reflection.Metadata.dll` (576 KB) — Roslyn 依赖
+- `Editor/Dlls/System.Runtime.CompilerServices.Unsafe.dll` (17 KB) — Roslyn 依赖
+
+**修改文件：**
+- `Editor/UnityCliBridge.Editor.asmdef` — `overrideReferences: true`，添加 5 个 Roslyn DLL 到 `precompiledReferences`
+- `Editor/Core/UnityCliBridgeHost.cs` — 添加 `script_execute` case 分发到 ScriptExecutionHandler
+- `Editor/Handlers/FairyGUIInputBridge.cs` — FairyGUI 输入模拟（SLG 定制）
+- `Editor/Helpers/PlayModeCommandPolicy.cs` — PlayMode 命令白名单/黑名单 + `script_` 前缀拦截
+
+**使用示例：**
+```bash
+unity-cli raw script_execute --json '{"code": "using UnityEngine; public class Script { public static string Main() { return Application.unityVersion; } }"}'
+# → { "result": "2022.3.62f3", "success": true }
+```
+
 ## [0.11.4] - 2026-06-02
 
 ### 🐛 Bug Fixes
