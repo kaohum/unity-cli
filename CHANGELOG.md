@@ -32,6 +32,24 @@ unity-cli raw script_execute --json '{"code": "using UnityEngine; public class S
 # → { "result": "2022.3.62f3", "success": true }
 ```
 
+### 🛠️ Improvements — `script_execute` 易用性迭代（5 轮）
+
+经多轮 AI Agent 实测驱动，`script_execute` 在运行时调试场景的易用性显著增强。Handler 拆分为 4 个 partial class（`ScriptExecutionHandler{,.Injection,.Diagnostics,.Compilation}`），新增能力：
+
+- **API 发现辅助**：内置 `Inspect(object)` / `InspectType(Type)` 助手，递归列出属性/方法/字段及当前值。静态类标 `[static class]`、实例类的静态成员标 `[static members only]` 区分
+- **编译错误 → 成员建议**：CS0117/CS1061 错误时自动解析目标类型并列出 `Available:` 成员（属性 + 方法 + 字段，含参数签名），相当于内置 IntelliSense；CS0119（类型当值用）给出 `InspectType(typeof(X))` 引导
+- **自动注入 using**：`System.Linq`（LINQ 替代）、`System.Reflection`、`using static ScriptHelper;`、`Game.Runtime` / `Framework.Runtime` / `Table` 等项目命名空间，用户代码可省略
+- **自动检测 class/method**：无需显式传 `class_name` / `method_name`，自动取首个 public class + 首个 public static method
+- **类型名渲染**：`FullTypeName` 取代 CLR `` `1[[...]] `` 全名；`ref/out` 参数解包；泛型类数组 `T<X>[]`；开放泛型方法 `SplitByCmdType<T>`；泛型参数显示为 `T`
+- **输出治理**：基础类型短路（直接返回值）；异常字段显示 `<ExceptionType>`；4KB 行级截断（不切断字段名）；集合类型显示 `[Type Count=N]`
+
+**新增文件：**
+- `Editor/Handlers/ScriptExecutionHandler.Injection.cs` — 自动 using 注入、`ScriptHelper` 助手代码、class/method 语法检测
+- `Editor/Handlers/ScriptExecutionHandler.Diagnostics.cs` — 编译错误成员建议（CS0117/CS1061/CS0119）
+- `Editor/Handlers/ScriptExecutionHandler.Compilation.cs` — 编译引用收集、返回值 JSON 序列化
+
+**实测结论**：28/28 模块、4 大核心系统（地图/内城/流水线/战斗）、8 张配置表全覆盖；已知 API 时成功率接近 100%，未知 API 时「先反射列方法 → 再调用」两步法 100% 有效。
+
 ## [0.11.4] - 2026-06-02
 
 ### 🐛 Bug Fixes
