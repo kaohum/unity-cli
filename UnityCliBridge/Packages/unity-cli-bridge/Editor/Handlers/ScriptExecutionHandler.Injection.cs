@@ -30,7 +30,8 @@ namespace UnityCliBridge.Handlers
 
         /// <summary>
         /// Helper class appended to user code. Provides Inspect/InspectType for runtime member discovery.
-        /// Features: basic-type short-circuit, full generic names, ByRef unwrap, clean full name,
+        /// Features: basic-type short-circuit, full generic names, ByRef/array unwrap, open generic
+        /// parameter display (`T`), method generic arg suffix (`M<T>`), clean full name,
         /// static-class tag, exception type in errors, line-boundary truncation (4KB limit).
         /// </summary>
         private static readonly string HelperCode = @"
@@ -59,7 +60,13 @@ public static class ScriptHelper
         {
             if (m.DeclaringType == typeof(object) || m.IsSpecialName) continue;
             var parms = string.Join("", "", m.GetParameters().Select(p => TypeName(p.ParameterType)));
-            lines.Add(""  "" + TypeName(m.ReturnType) + "" "" + m.Name + ""("" + parms + "")"");
+            var mn = m.Name;
+            if (m.ContainsGenericParameters)
+            {
+                var tps = string.Join("", "", m.GetGenericArguments().Select(TypeName));
+                mn = mn + ""<"" + tps + "">"";
+            }
+            lines.Add(""  "" + TypeName(m.ReturnType) + "" "" + mn + ""("" + parms + "")"");
         }
         return Truncate(string.Join(""\n"", lines));
     }
@@ -83,7 +90,13 @@ public static class ScriptHelper
         {
             if (m.DeclaringType == typeof(object) || m.IsSpecialName) continue;
             var parms = string.Join("", "", m.GetParameters().Select(p => TypeName(p.ParameterType)));
-            lines.Add(""  "" + TypeName(m.ReturnType) + "" "" + m.Name + ""("" + parms + "")"");
+            var mn = m.Name;
+            if (m.ContainsGenericParameters)
+            {
+                var tps = string.Join("", "", m.GetGenericArguments().Select(TypeName));
+                mn = mn + ""<"" + tps + "">"";
+            }
+            lines.Add(""  "" + TypeName(m.ReturnType) + "" "" + mn + ""("" + parms + "")"");
         }
         return Truncate(string.Join(""\n"", lines));
     }
@@ -97,7 +110,9 @@ public static class ScriptHelper
     }
     static string TypeName(Type t)
     {
-        if (t.IsByRef) t = t.GetElementType();
+        if (t.IsByRef) return TypeName(t.GetElementType());
+        if (t.IsArray) return TypeName(t.GetElementType()) + ""[]"";
+        if (t.IsGenericParameter) return t.Name;
         if (!t.IsGenericType) return t.Name;
         var name = t.Name;
         var idx = name.IndexOf('`');

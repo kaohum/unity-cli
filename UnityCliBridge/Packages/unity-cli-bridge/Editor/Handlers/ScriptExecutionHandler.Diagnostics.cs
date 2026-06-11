@@ -15,6 +15,7 @@ namespace UnityCliBridge.Handlers
     {
         /// <summary>
         /// Parse CS0117/CS1061 errors and build member suggestion strings for the target types.
+        /// Also handles CS0119 (type-as-value) with InspectType guidance.
         /// </summary>
         private static string[] BuildMemberSuggestions(Diagnostic[] diagnostics)
         {
@@ -23,50 +24,65 @@ namespace UnityCliBridge.Handlers
 
             foreach (var diag in diagnostics)
             {
-                if (diag.Id != "CS0117" && diag.Id != "CS1061") continue;
-
-                var msg = diag.GetMessage();
-                var match = Regex.Match(msg, @"^'([^']+)' does not contain a definition for '([^']+)'");
-                if (!match.Success) continue;
-
-                var typeName = match.Groups[1].Value;
-                var memberName = match.Groups[2].Value;
-                if (!seenTypes.Add(typeName)) continue;
-
-                var type = ResolveType(typeName);
-                if (type == null) continue;
-
-                var sb = new StringBuilder();
-                sb.AppendLine($"{type.FullName} has no member '{memberName}'. Available:");
-
-                var props = type.GetProperties(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance);
-                if (props.Length > 0)
+                if (diag.Id == "CS0117" || diag.Id == "CS1061")
                 {
-                    var names = props.Take(20).Select(p => $"{p.Name} [{p.PropertyType.Name}]");
-                    sb.AppendLine($"  Properties: {string.Join(", ", names)}");
-                }
+                    var msg = diag.GetMessage();
+                    var match = Regex.Match(msg, @"^'([^']+)' does not contain a definition for '([^']+)'");
+                    if (!match.Success) continue;
 
-                var methods = type.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance)
-                    .Where(m => m.DeclaringType != typeof(object) && !m.IsSpecialName)
-                    .ToArray();
-                if (methods.Length > 0)
-                {
-                    var names = methods.Take(20).Select(m =>
+                    var typeName = match.Groups[1].Value;
+                    var memberName = match.Groups[2].Value;
+                    if (!seenTypes.Add(typeName)) continue;
+
+                    var type = ResolveType(typeName);
+                    if (type == null) continue;
+
+                    var sb = new StringBuilder();
+                    sb.AppendLine($"{type.FullName} has no member '{memberName}'. Available:");
+
+                    var props = type.GetProperties(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance);
+                    if (props.Length > 0)
                     {
-                        var parameters = string.Join(", ", m.GetParameters().Select(p => p.ParameterType.Name));
-                        return $"{m.Name}({parameters})";
-                    });
-                    sb.AppendLine($"  Methods: {string.Join(", ", names)}");
-                }
+                        var names = props.Take(20).Select(p => $"{p.Name} [{p.PropertyType.Name}]");
+                        sb.AppendLine($"  Properties: {string.Join(", ", names)}");
+                    }
 
-                var fields = type.GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance);
-                if (fields.Length > 0)
+                    var methods = type.GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance)
+                        .Where(m => m.DeclaringType != typeof(object) && !m.IsSpecialName)
+                        .ToArray();
+                    if (methods.Length > 0)
+                    {
+                        var names = methods.Take(20).Select(m =>
+                        {
+                            var parameters = string.Join(", ", m.GetParameters().Select(p => p.ParameterType.Name));
+                            return $"{m.Name}({parameters})";
+                        });
+                        sb.AppendLine($"  Methods: {string.Join(", ", names)}");
+                    }
+
+                    var fields = type.GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance);
+                    if (fields.Length > 0)
+                    {
+                        var names = fields.Take(20).Select(f => $"{f.Name} [{f.FieldType.Name}]");
+                        sb.AppendLine($"  Fields: {string.Join(", ", names)}");
+                    }
+
+                    suggestions.Add(sb.ToString().TrimEnd());
+                }
+                else if (diag.Id == "CS0119")
                 {
-                    var names = fields.Take(20).Select(f => $"{f.Name} [{f.FieldType.Name}]");
-                    sb.AppendLine($"  Fields: {string.Join(", ", names)}");
+                    // 'X' is a type, which is not valid in the given context
+                    var match = Regex.Match(diag.GetMessage(), @"^'([^']+)' is a type");
+                    if (match.Success)
+                    {
+                        var typeName = match.Groups[1].Value;
+                        var type = ResolveType(typeName);
+                        if (type != null && type.IsAbstract && type.IsSealed)
+                        {
+                            suggestions.Add($"Tip: '{typeName}' is a static class. Use InspectType(typeof({typeName})) to inspect its static members.");
+                        }
+                    }
                 }
-
-                suggestions.Add(sb.ToString().TrimEnd());
             }
 
             return suggestions.ToArray();
