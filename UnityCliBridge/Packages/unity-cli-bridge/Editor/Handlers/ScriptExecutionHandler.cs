@@ -30,6 +30,11 @@ namespace UnityCliBridge.Handlers
                 if (string.IsNullOrWhiteSpace(code))
                     return new { success = false, error = "Parameter 'code' is required" };
 
+                // 日志捕获参数:capture_logs(默认开启)、log_level(默认全收)、log_limit(默认上限)
+                bool captureLogs = parameters["capture_logs"]?.ToObject<bool>() ?? true;
+                LogType minLevel = ParseLogLevel(parameters["log_level"]?.ToObject<string>());
+                int logLimit = parameters["log_limit"]?.ToObject<int>() ?? DefaultCaptureLimit;
+
                 // 1. Auto-inject usings
                 code = InjectUsings(code);
 
@@ -86,8 +91,63 @@ namespace UnityCliBridge.Handlers
                     return new { success = false, error = $"Method '{methodName}' not found on '{className}'. Available methods: [{string.Join(", ", available)}]" };
                 }
 
-                var result = method.Invoke(null, null);
-                return new { success = true, result = SerializeResult(result) };
+                // 日志捕获窗口:仅收集"本次 Invoke 期间"产生的 Unity 日志(含被业务 try-catch 吞掉的异常前的诊断日志)。
+                // 内层 try 独立捕获 Invoke 异常并暂存,确保 finally 一定能关闭捕获窗口,避免事件订阅泄漏。
+                object invokeResult = null;
+                Exception invokeEx = null;
+                List<CapturedLogEntry> capturedLogs = null;
+                int capturedTruncated = 0;
+                if (captureLogs)
+                {
+                    BeginCapture(logLimit, minLevel);
+                }
+                try
+                {
+                    invokeResult = method.Invoke(null, null);
+                }
+                catch (TargetInvocationException tie)
+                {
+                    invokeEx = tie.InnerException ?? tie;
+                }
+                catch (Exception ex)
+                {
+                    invokeEx = ex;
+                }
+                finally
+                {
+                    if (captureLogs)
+                    {
+                        capturedLogs = EndCapture(out capturedTruncated);
+                    }
+                }
+
+                List<object> logList = null;
+                object logSummary = null;
+                if (capturedLogs != null)
+                {
+                    var payload = BuildLogPayload(capturedLogs, capturedTruncated);
+                    logList = payload.logs;
+                    logSummary = payload.logSummary;
+                }
+
+                if (invokeEx != null)
+                {
+                    return new
+                    {
+                        success = false,
+                        error = invokeEx.Message,
+                        stackTrace = invokeEx.StackTrace,
+                        logs = logList,
+                        logSummary = logSummary,
+                    };
+                }
+                return new
+                {
+                    success = true,
+                    result = SerializeResult(invokeResult),
+                    logs = logList,
+                    logSummary = logSummary,
+                };
             }
             catch (TargetInvocationException tie)
             {
