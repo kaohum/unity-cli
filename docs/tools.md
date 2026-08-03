@@ -190,8 +190,11 @@ Global options:
 | `registry_config` | Configure scoped registries |
 | `get_editor_info` | Get editor version info |
 | `get_editor_state` | Get editor state |
+| `script_execute` | Dynamically compile and execute C# code via Roslyn (supports async cross-frame via `IScriptTask`) |
 | `get_project_settings` | Get project settings |
 | `update_project_settings` | Update project settings |
+
+支持 async 跨帧：返回 `Task<T>` + `IScriptTask` 参数即可 `await ctx.NextFrame()`，详见 reference。
 
 ### Screenshots & Video
 
