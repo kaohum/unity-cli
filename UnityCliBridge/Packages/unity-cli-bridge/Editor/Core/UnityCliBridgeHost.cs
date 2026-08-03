@@ -1124,7 +1124,7 @@ namespace UnityCliBridge.Core
                         }
                     // Dynamic script execution (Roslyn-based)
                     case "script_execute":
-                        var scriptExecuteResult = ScriptExecutionHandler.Execute(command.Parameters);
+                        var scriptExecuteResult = await ScriptExecutionHandler.ExecuteAsync(command.Parameters, client);
                         response = Response.SuccessResult(command.Id, scriptExecuteResult);
                         break;
                     default:
@@ -1338,35 +1338,35 @@ namespace UnityCliBridge.Core
                 return 0;
             }
 
+            var dropped = 0;
             lock (queueLock)
             {
-                if (commandQueue.Count == 0)
+                if (commandQueue.Count > 0)
                 {
-                    return 0;
-                }
+                    var retained = new Queue<(Command command, TcpClient client, DateTime enqueuedAtUtc)>(commandQueue.Count);
 
-                var dropped = 0;
-                var retained = new Queue<(Command command, TcpClient client, DateTime enqueuedAtUtc)>(commandQueue.Count);
-
-                while (commandQueue.Count > 0)
-                {
-                    var item = commandQueue.Dequeue();
-                    if (ReferenceEquals(item.client, client))
+                    while (commandQueue.Count > 0)
                     {
-                        dropped++;
-                        continue;
+                        var item = commandQueue.Dequeue();
+                        if (ReferenceEquals(item.client, client))
+                        {
+                            dropped++;
+                            continue;
+                        }
+
+                        retained.Enqueue(item);
                     }
 
-                    retained.Enqueue(item);
+                    while (retained.Count > 0)
+                    {
+                        commandQueue.Enqueue(retained.Dequeue());
+                    }
                 }
-
-                while (retained.Count > 0)
-                {
-                    commandQueue.Enqueue(retained.Dequeue());
-                }
-
-                return dropped;
             }
+
+            // 取消该 client 正在跨帧等待的 async script_execute 任务, 避免 update 订阅泄漏
+            AsyncScriptTaskRegistry.CancelForClient(client);
+            return dropped;
         }
 
         /// <summary>

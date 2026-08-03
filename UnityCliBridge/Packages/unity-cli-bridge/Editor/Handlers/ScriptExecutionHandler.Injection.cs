@@ -1,8 +1,11 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using UnityCliBridge.Models;
 
 namespace UnityCliBridge.Handlers
 {
@@ -21,11 +24,13 @@ namespace UnityCliBridge.Handlers
             "using System.Collections.Generic;",
             "using System.Linq;",
             "using System.Reflection;",
+            "using System.Threading.Tasks;",   // async 跨帧模式所需
             "using static ScriptHelper;",
             "using UnityEngine;",
             "using Game.Runtime;",
             "using Framework.Runtime;",
             "using Table;",
+            "using UnityCliBridge.Models;",     // IScriptTask 所在命名空间
         };
 
         /// <summary>
@@ -183,6 +188,19 @@ public static class ScriptHelper
                 methodName = methodDecl.Identifier.Text;
 
             return (className, methodName);
+        }
+
+        /// <summary>方法返回 Task 或 Task&lt;T&gt; 即视为 async 路径。</summary>
+        internal static bool IsAsyncMethod(MethodInfo method)
+        {
+            return method != null && typeof(Task).IsAssignableFrom(method.ReturnType);
+        }
+
+        /// <summary>方法首个参数是否为 IScriptTask(决定是否注入上下文实例)。</summary>
+        internal static bool WantsScriptTaskParam(MethodInfo method)
+        {
+            var ps = method?.GetParameters();
+            return ps != null && ps.Length == 1 && ps[0].ParameterType == typeof(IScriptTask);
         }
     }
 }

@@ -138,7 +138,12 @@ unity-cli --dry-run tool call create_scene --json '{"sceneName":"PreviewScene"}'
 
 # Run EditMode tests
 unity-cli tool call run_tests --json '{"mode":"editmode"}'
+
+# Dynamic C# execution (Roslyn)
+unity-cli raw script_execute --json '{"code": "using UnityEngine; public class Script { public static string Main() { return Application.unityVersion; } }"}'
 ```
+
+支持 async 跨帧：返回 `Task<T>` + `IScriptTask` 参数即可 `await ctx.NextFrame()`，详见 reference。
 
 ## GWT Spec Workflow
 
