@@ -281,5 +281,132 @@ namespace UnityCliBridge.Handlers
                 return null;
             }
         }
+
+        // LogEntries.GetCount/GetEntryInternal 受 Console 面板 consoleFlags 的 LogLevelLog/Warning/Error 位过滤，
+        // 面板关掉 Error 显示时 read_console 读不到编译错误，导致编译验证漏判。读取前强制全开、读完恢复。
+        private static PropertyInfo _consoleFlagsProperty;
+        private static int _consoleFlagsLogLevelMask;
+        private static bool _consoleFlagsInitialized;
+
+        private static void EnsureConsoleFlagsReflection()
+        {
+            if (_consoleFlagsInitialized) return;
+            _consoleFlagsInitialized = true;
+            try
+            {
+                var logEntriesType = Type.GetType("UnityEditor.LogEntries, UnityEditor");
+                _consoleFlagsProperty = logEntriesType?.GetProperty("consoleFlags",
+                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                // ConsoleFlags 是嵌套枚举 UnityEditor.ConsoleWindow+ConsoleFlags，显示开关位名以 LogLevel 开头
+                Type cfType = null;
+                foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    Type[] ts;
+                    try { ts = asm.GetTypes(); } catch { continue; }
+                    foreach (var ty in ts)
+                        if (ty.Name == "ConsoleFlags") { cfType = ty; break; }
+                    if (cfType != null) break;
+                }
+                int mask = 0;
+                if (cfType != null)
+                    foreach (var name in Enum.GetNames(cfType))
+                        if (name.StartsWith("LogLevel")) mask |= (int)Enum.Parse(cfType, name);
+                _consoleFlagsLogLevelMask = mask;
+            }
+            catch (Exception ex)
+            {
+                BridgeLogger.LogWarning("CompilationHandler", $"EnsureConsoleFlagsReflection failed: {ex.Message}");
+            }
+        }
+
+        private static int PushConsoleLogLevels()
+        {
+            EnsureConsoleFlagsReflection();
+            if (_consoleFlagsProperty == null || _consoleFlagsLogLevelMask == 0) return 0;
+            int orig = (int)_consoleFlagsProperty.GetValue(null);
+            _consoleFlagsProperty.SetValue(null, orig | _consoleFlagsLogLevelMask);
+            return orig;
+        }
+
+        private static void RestoreConsoleFlags(int orig)
+        {
+            if (_consoleFlagsProperty == null) return;
+            try { _consoleFlagsProperty.SetValue(null, orig); }
+            catch (Exception ex) { BridgeLogger.LogWarning("CompilationHandler", $"RestoreConsoleFlags failed: {ex.Message}"); }
+        }
+
+        /// <summary>
+        /// 读取编译错误（及可选警告），免疫 Console 面板 LogLevel 显示过滤。
+        /// </summary>
+        public static object GetCompileErrors(JObject parameters)
+        {
+            try
+            {
+                bool includeWarnings = parameters["includeWarnings"]?.ToObject<bool>() ?? false;
+                int maxCount = parameters["count"]?.ToObject<int>() ?? 100;
+                var errors = new List<CompilationMessage>();
+                var warnings = new List<CompilationMessage>();
+
+                var logEntriesType = Type.GetType("UnityEditor.LogEntries, UnityEditor");
+                var startMethod = logEntriesType?.GetMethod("StartGettingEntries", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                var endMethod   = logEntriesType?.GetMethod("EndGettingEntries",   BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                var getCount    = logEntriesType?.GetMethod("GetCount",            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                var getEntry    = logEntriesType?.GetMethod("GetEntryInternal",     BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                var logEntryType = typeof(EditorApplication).Assembly.GetType("UnityEditor.LogEntry");
+                var modeField    = logEntryType?.GetField("mode",    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var messageField = logEntryType?.GetField("message", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var fileField    = logEntryType?.GetField("file",    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var lineField    = logEntryType?.GetField("line",    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+                if (startMethod == null || endMethod == null || getCount == null || getEntry == null
+                    || modeField == null || messageField == null)
+                    return new { success = false, error = "LogEntries reflection not initialized" };
+
+                int origFlags = PushConsoleLogLevels();
+                startMethod.Invoke(null, null);
+                try
+                {
+                    int total = (int)getCount.Invoke(null, null);
+                    var entry = Activator.CreateInstance(logEntryType);
+                    for (int i = 0; i < total && (errors.Count + warnings.Count) < maxCount; i++)
+                    {
+                        getEntry.Invoke(null, new object[] { i, entry });
+                        string message = (string)messageField.GetValue(entry);
+                        if (string.IsNullOrEmpty(message)) continue;
+
+                        // 以编译器诊断消息文本区分 error/warning；Unity LogEntry.mode 对编译警告也置
+                        // ScriptCompileError 位，不能区分 error/warning，故不依赖 mode 位
+                        TryClassifyCompilerDiagnostic(message, out bool diagError, out bool diagWarning);
+                        if (!diagError && !diagWarning) continue;
+                        bool isError = diagError;
+                        bool isWarning = includeWarnings && diagWarning;
+                        if (!isError && !isWarning) continue;
+
+                        var msg = new CompilationMessage
+                        {
+                            type = isError ? "Error" : "Warning",
+                            message = message.Split('\n')[0].Trim(),
+                            file = (string)fileField?.GetValue(entry),
+                            line = (int)(lineField?.GetValue(entry) ?? 0),
+                            column = 0,
+                            timestamp = DateTime.Now.ToString("o")
+                        };
+                        if (isError) errors.Add(msg); else warnings.Add(msg);
+                    }
+                }
+                finally
+                {
+                    endMethod.Invoke(null, null);
+                    RestoreConsoleFlags(origFlags);
+                }
+
+                return new { success = true, errorCount = errors.Count, warningCount = warnings.Count, errors = errors, warnings = warnings };
+            }
+            catch (Exception ex)
+            {
+                BridgeLogger.LogError("CompilationHandler", $"GetCompileErrors failed: {ex.Message}");
+                return new { success = false, error = $"Failed: {ex.Message}" };
+            }
+        }
     }
 }

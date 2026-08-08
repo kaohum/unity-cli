@@ -2,6 +2,7 @@
 
 ### 🚀 Features
 
+- *(bridge)* **`get_compile_errors` — 编译错误专用读取接口（免疫 Console 面板过滤）**：`unity-cli raw get_compile_errors` 返回结构化编译错误（`errorCount`/`errors[]`，`includeWarnings` 可选附警告）。现有 `read_console`/`get_compilation_state` 走 `LogEntries.StartGettingEntries/GetCount/GetEntryInternal`，返回受 Console 面板 `consoleFlags` 的 LogLevelLog/Warning/Error 位过滤——面板关掉 Error 显示时读不到编译错误，导致 `verify-compile.sh` 等自动化漏判。新接口读取前临时强制 LogLevel 全开、`finally` 恢复原值；error/warning 以编译器诊断消息文本（`: error CS` / `: warning CS`）判定，不依赖 `LogEntry.mode` 位（该位对编译警告也置 `ScriptCompileError`，无法区分 error/warning）
 - *(bridge)* **`script_execute` — Roslyn 动态编译执行 C# 代码**：AI Agent 可通过 `unity-cli raw script_execute` 在 Unity Editor 中编译并执行任意 C# 代码，所有 Unity API 和项目程序集均可访问。支持编译错误诊断、运行时异常捕获、复杂返回值自动 JSON 序列化。Editor 和 Play Mode 均可使用（PlayMode 白名单放行，支持运行时动态调试）
 - *(bridge)* SLG 项目定制扩展：FairyGUI 输入桥接（`fairygui_tap`/`fairygui_click_by_text`/`fairygui_list_buttons`）、PlayMode 命令策略（白名单+黑名单+启发式拦截）、端口根据项目路径自动计算、`InvokeExternalHandler` 反射调用外部 Handler
 - *(bridge)* **`script_execute` 日志回传**：执行期间的 Unity 日志（`Debug.Log*`/`LoggerService`/未捕获异常）随返回值经 `logs` + `logSummary` 字段自动回传，无需额外 `read_console` 命令。新增 `capture_logs`（默认开）/`log_level`（默认全收）/`log_limit`（默认 500）参数控制捕获范围；运行时异常分支同样带回异常前的诊断日志（修复异常前日志全丢盲点）；桥自身 `[unity-cli-bridge]` 日志自动过滤。新增 `ScriptExecutionHandler.LogCapture.cs` partial——局部订阅 `Application.logMessageReceived`，缓存方法组引用避免订阅 GC，与全局日志缓冲/read_console 零相互污染

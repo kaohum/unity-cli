@@ -944,6 +944,11 @@ namespace UnityCliBridge.Core
 	                        var compilationStateResult = CompilationHandler.GetCompilationState(command.Parameters);
 	                        response = Response.SuccessResult(command.Id, compilationStateResult);
 	                        break;
+	                    // get_compile_errors: 编译错误专用接口，免疫 Console 面板 LogLevel 显示过滤
+	                    case "get_compile_errors":
+	                        var compileErrorsResult = CompilationHandler.GetCompileErrors(command.Parameters);
+	                        response = Response.SuccessResult(command.Id, compileErrorsResult);
+	                        break;
                     // Test Execution commands
                     case "run_tests":
                         var runTestsResult = TestExecutionHandler.RunTests(command.Parameters);
