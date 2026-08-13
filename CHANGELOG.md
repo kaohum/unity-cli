@@ -1,5 +1,9 @@
 ## [Unreleased]
 
+### 🐛 Bug Fixes
+
+- *(bridge)* **`get_compile_errors` 不再掩盖非白名单诊断 ID 的错误**：原实现用诊断 ID 前缀白名单 `(CS|BC|SG|AD|NU|IDE|CA)` 过滤，前缀不在白名单的诊断（如项目自定义 Roslyn 分析器 `YKA0007`）被 `continue` 静默丢弃；同时所有非编译器诊断格式的错误级条目（运行时 `Debug.LogError`/`Exception`、assembly 错误等）一并被丢弃，导致 `verify-compile.sh` 在存在这类错误时误报"无编译错误"。修复：正则前缀放宽为 `[A-Z]{2,}\d+`（覆盖全部合法 Roslyn 诊断 ID），新增 `ClassifyEntry`——编译诊断用消息文本拆 error/warning，其余条目按 `LogEntry.mode` 的 severity 位判定，**任何错误级条目都不再丢弃**（正则仅用于 error/warning 分类，不再作为丢弃门禁）
+
 ### 🚀 Features
 
 - *(bridge)* **`get_compile_errors` — 编译错误专用读取接口（免疫 Console 面板过滤）**：`unity-cli raw get_compile_errors` 返回结构化编译错误（`errorCount`/`errors[]`，`includeWarnings` 可选附警告）。现有 `read_console`/`get_compilation_state` 走 `LogEntries.StartGettingEntries/GetCount/GetEntryInternal`，返回受 Console 面板 `consoleFlags` 的 LogLevelLog/Warning/Error 位过滤——面板关掉 Error 显示时读不到编译错误，导致 `verify-compile.sh` 等自动化漏判。新接口读取前临时强制 LogLevel 全开、`finally` 恢复原值；error/warning 以编译器诊断消息文本（`: error CS` / `: warning CS`）判定，不依赖 `LogEntry.mode` 位（该位对编译警告也置 `ScriptCompileError`，无法区分 error/warning）

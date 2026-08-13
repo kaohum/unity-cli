@@ -29,11 +29,19 @@ namespace UnityCliBridge.Handlers
             public string timestamp;
         }
 
-        // Mode bits for script compilation entries (Unity internal LogEntry.mode)
+        // Mode bits for LogEntry.mode (Unity 内部位)。severity 位用于非编译诊断的严重级判定。
+        private const int ModeBitError = 1 << 0;                 // 0x00000001
+        private const int ModeBitWarning = 1 << 2;               // 0x00000004
+        private const int ModeBitFatal = 1 << 4;                 // 0x00000010 (Exception)
+        private const int ModeBitScriptingError = 1 << 9;        // 0x00000200
+        private const int ModeBitScriptingWarning = 1 << 10;     // 0x00000400
         private const int ModeBitScriptCompileError = 1 << 12;   // 0x00001000
         private const int ModeBitScriptCompileWarning = 1 << 13; // 0x00002000
+        private const int ModeBitScriptingException = 1 << 18;   // 0x00040000
+        // 编译器诊断 ID 前缀放宽为"≥2 大写字母+数字"，覆盖 CS/CA/IDE 及项目自定义分析器(YKA 等)。
+        // 仅用于 error/warning 分类，不作为丢弃条目的门禁。
         private static readonly Regex CompilerDiagnosticRegex = new Regex(
-            @"\)\s*:\s*(error|warning)\s+(?:CS|BC|SG|AD|NU|IDE|CA)\d+",
+            @"\)\s*:\s*(error|warning)\s+[A-Z]{2,}\d+",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         /// <summary>
@@ -263,6 +271,35 @@ namespace UnityCliBridge.Handlers
             return isError || isWarning;
         }
 
+        /// <summary>
+        /// 按 mode 位 + 编译诊断文本混合判定严重级，任何错误级条目都不丢弃。
+        /// 编译诊断用文本(`: error/warning CODE:`)拆分——mode 位对编译警告也置 ScriptCompileError，不可靠；
+        /// 其余条目(运行时 LogError/Exception 等)按 severity 位判定，避免 clear 后残存的运行时错误被静默掩盖。
+        /// </summary>
+        private static void ClassifyEntry(int mode, string message, out bool isError, out bool isWarning)
+        {
+            if (TryClassifyCompilerDiagnostic(message, out bool diagError, out bool diagWarning))
+            {
+                isError = diagError;
+                isWarning = diagWarning;
+                return;
+            }
+
+            // 非编译诊断按 severity 位判定。Assert 不计入硬失败门禁。
+            bool modeError = (mode & (ModeBitError | ModeBitScriptingError | ModeBitFatal | ModeBitScriptingException)) != 0;
+            bool modeWarning = (mode & (ModeBitWarning | ModeBitScriptingWarning | ModeBitScriptCompileWarning)) != 0;
+            if (modeError || modeWarning)
+            {
+                isError = modeError;
+                isWarning = modeWarning;
+                return;
+            }
+
+            // 兜底：仅 ScriptCompileError 置位(无格式、无 severity 位)时按错误上报，宁可误报不掩盖。
+            isError = (mode & ModeBitScriptCompileError) != 0;
+            isWarning = false;
+        }
+
         private static string GetLastAssemblyWriteTime()
         {
             try
@@ -336,7 +373,8 @@ namespace UnityCliBridge.Handlers
         }
 
         /// <summary>
-        /// 读取编译错误（及可选警告），免疫 Console 面板 LogLevel 显示过滤。
+        /// 读取 console 中所有错误级条目(编译错误 + 运行时 LogError/Exception)，免疫 Console 面板 LogLevel 显示过滤。
+        /// 不丢弃任何错误级条目：编译诊断用文本拆 error/warning，其余按 mode 位判定，避免掩盖 clear 后残存的运行时错误。
         /// </summary>
         public static object GetCompileErrors(JObject parameters)
         {
@@ -374,13 +412,9 @@ namespace UnityCliBridge.Handlers
                         string message = (string)messageField.GetValue(entry);
                         if (string.IsNullOrEmpty(message)) continue;
 
-                        // 以编译器诊断消息文本区分 error/warning；Unity LogEntry.mode 对编译警告也置
-                        // ScriptCompileError 位，不能区分 error/warning，故不依赖 mode 位
-                        TryClassifyCompilerDiagnostic(message, out bool diagError, out bool diagWarning);
-                        if (!diagError && !diagWarning) continue;
-                        bool isError = diagError;
-                        bool isWarning = includeWarnings && diagWarning;
-                        if (!isError && !isWarning) continue;
+                        int mode = (int)modeField.GetValue(entry);
+                        ClassifyEntry(mode, message, out bool isError, out bool isWarning);
+                        if (!isError && !(includeWarnings && isWarning)) continue;
 
                         var msg = new CompilationMessage
                         {
